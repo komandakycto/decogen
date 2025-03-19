@@ -1,0 +1,117 @@
+// internal/generator/templates/retry.go.tmpl
+package {{.PackageName}}
+
+import (
+	"context"
+	"errors"
+	"fmt"
+	"time"
+
+	"github.com/sirupsen/logrus"
+	{{range $pkg, $path := .Imports}}
+	"{{$path}}"
+	{{end}}
+)
+
+// ErrAllAttemptsFailed is returned when all retry attempts failed
+var ErrAllAttemptsFailed = errors.New("all retry attempts failed")
+
+// {{.Name}}WithRetry is a retryable decorator for {{.Name}}
+type {{.Name}}WithRetry struct {
+	underlying {{.Name}}
+	backoff    BackOff
+	logger     logrus.FieldLogger
+	maxAttempts uint8
+}
+
+// New{{.Name}}WithRetry creates a new retryable decorator for {{.Name}}
+func New{{.Name}}WithRetry(
+	underlying {{.Name}},
+	backoff BackOff,
+	logger logrus.FieldLogger,
+	maxAttempts uint8,
+) *{{.Name}}WithRetry {
+	if maxAttempts == 0 {
+		maxAttempts = 5 // Default max attempts
+	}
+
+	return &{{.Name}}WithRetry{
+		underlying: underlying,
+		backoff: backoff,
+		logger: logger,
+		maxAttempts: maxAttempts,
+	}
+}
+
+{{range .Methods}}
+// {{.Name}} implements {{$.Name}}.{{.Name}} with retry logic
+func (r *{{$.Name}}WithRetry) {{.FormatMethodSignature()}} {
+	{{if .HasReturnValue}}
+	{{.FormatResultDeclarations}}
+	{{end}}
+
+	attempt := uint8(0)
+	wait := r.backoff.MinDelay()
+	ctxParam := {{if .FormatContextParam}}{{.FormatContextParam}}{{else}}context.Background(){{end}}
+
+	for {
+		logFields := logrus.Fields{
+			"method": "{{.Name}}",
+			"attempt": attempt + 1,
+		}
+
+		{{if .HasReturnValue}}
+		{{if .HasErrorReturn}}
+		var err error
+		{{range .Results}}
+		{{if .Type != "error"}}{{.Name}}, {{end}}
+		{{end}}err = r.underlying.{{.FormatMethodCall}}
+		{{else}}
+		{{range .Results}}
+		{{.Name}} = r.underlying.{{.FormatMethodCall}}
+		{{end}}
+		{{end}}
+		{{else}}
+		err := r.underlying.{{.FormatMethodCall}}
+		{{end}}
+
+		{{if .HasErrorReturn}}
+		if err == nil {
+			{{.FormatResultReturn "nil"}}
+		}
+
+		// Check for unrecoverable errors
+		if errors.Is(err, context.Canceled) {
+			r.logger.WithFields(logFields).WithError(err).Warn("operation canceled")
+			{{.FormatResultReturn "err"}}
+		}
+
+		// Check max attempts
+		if attempt >= r.maxAttempts {
+			r.logger.WithFields(logFields).WithError(err).Error("all retry attempts failed")
+			{{.FormatResultReturn "ErrAllAttemptsFailed"}}
+		}
+
+		r.logger.WithFields(logFields).WithError(err).Warn("operation failed, retrying...")
+
+		// Wait before next attempt
+		select {
+		case <-ctxParam.Done():
+			{{.FormatResultReturn "fmt.Errorf(\"context cancelled during retry: %w\", ctxParam.Err())"}}
+		case <-time.After(wait):
+			attempt++
+			wait = r.backoff.Delay(wait)
+		}
+		{{else}}
+		// Simple return for non-error returning methods
+		{{.FormatResultReturn ""}}
+		{{end}}
+	}
+}
+{{end}}
+
+// BackOff interface for the retry decorator
+type BackOff interface {
+	MinDelay() time.Duration
+	Delay(time.Duration) time.Duration
+}
