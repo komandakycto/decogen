@@ -1,4 +1,4 @@
-module github.com/clobucks/decogen
+module github.com/komandakycto/decogen
 
 go 1.24
 
