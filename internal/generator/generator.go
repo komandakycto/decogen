@@ -8,7 +8,7 @@ import (
 	"strings"
 	"text/template"
 
-	"github.com/clobucks/decogen/internal/model"
+	"github.com/komandakycto/decogen/internal/model"
 )
 
 // DecoratorType represents the type of decorator to generate

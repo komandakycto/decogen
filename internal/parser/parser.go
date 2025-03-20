@@ -9,7 +9,7 @@ import (
 	"path/filepath"
 	"strings"
 
-	"github.com/clobucks/decogen/internal/model"
+	"github.com/komandakycto/decogen/internal/model"
 )
 
 // ParseInterface parses a Go source file and extracts the specified interface

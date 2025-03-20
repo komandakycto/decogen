@@ -6,7 +6,7 @@ import (
 	"os"
 	"strings"
 
-	"github.com/clobucks/decogen/internal/generator"
+	"github.com/komandakycto/decogen/internal/generator"
 )
 
 // Config represents the configuration for the decorator generator

@@ -5,9 +5,9 @@ import (
 	"log"
 	"strings"
 
-	"github.com/clobucks/decogen/internal/config"
-	"github.com/clobucks/decogen/internal/generator"
-	"github.com/clobucks/decogen/internal/parser"
+	"github.com/komandakycto/decogen/internal/config"
+	"github.com/komandakycto/decogen/internal/generator"
+	"github.com/komandakycto/decogen/internal/parser"
 )
 
 func main() {

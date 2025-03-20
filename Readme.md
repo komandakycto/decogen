@@ -5,7 +5,7 @@ Decogen is a code generation tool that automatically creates decorator implement
 ## Installation
 
 ```bash
-go install github.com/clobucks/decogen/cmd/decogen@latest
+go install github.com/komandakycto/decogen/cmd/decogen@latest
 ```
 
 ## Usage
