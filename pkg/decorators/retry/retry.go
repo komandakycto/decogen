@@ -1,72 +1,3 @@
-// Package retry provides functionality for retrying operations with configurable backoff.
-//
-// This package offers a flexible approach to implementing retry mechanisms with various
-// backoff strategies. It supports context cancellation, custom error handling,
-// and different return signatures (error-only or value+error).
-//
-// Key features:
-// - Configurable maximum number of attempts
-// - Support for any backoff strategy implementing the Backoff interface
-// - Context-aware retries that respect cancellation
-// - Classification of recoverable vs. unrecoverable errors
-// - Support for operations that return values
-// - Callbacks for monitoring retry attempts
-//
-// Basic usage with error-only function:
-//
-//	// Create a backoff strategy
-//	backoff := backoff.Default()
-//
-//	// Configure retry behavior
-//	config := retry.DefaultConfig(backoff)
-//	config.MaxAttempts = 5
-//
-//	// Execute with retries
-//	err := retry.Do(ctx, config, func() error {
-//		return someOperation()
-//	})
-//
-// For functions that return a value and an error:
-//
-//	result, err := retry.DoWithValue(ctx, config, func() (MyType, error) {
-//		return someOperation()
-//	})
-//
-// To mark errors as unrecoverable (preventing further retries):
-//
-//	func someOperation() error {
-//		// ...
-//		if permanentFailure {
-//			return retry.NewUnrecoverableError(fmt.Errorf("permanent failure"))
-//		}
-//		// ...
-//	}
-//
-// The package integrates with the context package to support cancellation and timeouts:
-//
-//	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
-//	defer cancel()
-//
-//	// Each retry attempt will respect the context deadline
-//	err := retry.Do(ctx, config, func() error {
-//		// This operation can take time but will be cancelled if the context expires
-//		return timeConsumingOperation(ctx)
-//	})
-//
-// For advanced control, you can customize the retry behavior:
-//
-//	config := retry.RetryConfig{
-//		MaxAttempts: 10,
-//		Backoff:     myCustomBackoff,
-//		IsRecoverable: func(err error) bool {
-//			// Custom logic to determine if an error should be retried
-//			return !retry.IsUnrecoverableError(err) && !isRateLimitError(err)
-//		},
-//		OnRetry: func(attempt uint, err error, delay time.Duration) {
-//			// Log or measure each retry attempt
-//			logger.Infof("Retry %d after error: %v (waiting %v)", attempt, err, delay)
-//		},
-//	}
 package retry
 
 import (
@@ -106,7 +37,75 @@ func Default(backoff Backoff) Config {
 // Do executes a function with retries based on the provided config
 // This is for functions that return only an error
 func Do(ctx context.Context, config Config, op func() error) error {
-	// Validate configuration
+	// Validate and prepare configuration
+	if err := validateConfig(&config); err != nil {
+		return err
+	}
+
+	var lastErr error
+
+	// Run the retry loop
+	err := doRetry(ctx, config, func(attempt uint) (bool, error) {
+		err := op()
+		if err == nil {
+			return true, nil // Success
+		}
+
+		lastErr = err
+		return false, err
+	})
+
+	// check if all attempts failed
+	if err != nil {
+		if errors.Is(err, ErrAllAttemptsFailed) {
+			return fmt.Errorf("%w: %w", ErrAllAttemptsFailed, lastErr)
+		}
+
+		return err
+	}
+
+	return nil
+}
+
+// DoWithValue executes a function with retries based on the provided config
+// This is for functions that return a value and an error
+func DoWithValue[T any](ctx context.Context, config Config, op func() (T, error)) (T, error) {
+	var zero T
+	var result T
+	var lastErr error
+
+	// Validate and prepare configuration
+	if err := validateConfig(&config); err != nil {
+		return zero, err
+	}
+
+	// Run the retry loop
+	err := doRetry(ctx, config, func(attempt uint) (bool, error) {
+		var err error
+		result, err = op()
+		if err == nil {
+			return true, nil // Success
+		}
+
+		lastErr = err
+		return false, err
+	})
+
+	// If we have an actual error from the retry mechanism, return it
+	if err != nil {
+		if errors.Is(err, ErrAllAttemptsFailed) {
+			return zero, fmt.Errorf("%w: %v", ErrAllAttemptsFailed, lastErr)
+		}
+
+		return zero, err
+	}
+
+	// Otherwise return the successful result
+	return result, nil
+}
+
+// validateConfig checks and initializes the retry configuration
+func validateConfig(config *Config) error {
 	if config.Backoff == nil {
 		return fmt.Errorf("backoff strategy is required")
 	}
@@ -119,103 +118,35 @@ func Do(ctx context.Context, config Config, op func() error) error {
 		config.IsRecoverable = defaultRecoverable()
 	}
 
-	var lastErr error
-	attempt := uint(0)
-	delay := config.Backoff.MinDelay()
-
-	for attempt < config.MaxAttempts {
-		// Check context before the attempt
-		if ctx.Err() != nil {
-			return ctx.Err()
-		}
-
-		// Execute the operation
-		err := op()
-		if err == nil {
-			return nil // Success
-		}
-
-		lastErr = err
-
-		// Check if context is canceled
-		if errors.Is(err, context.Canceled) || ctx.Err() != nil {
-			return err
-		}
-
-		// Check if error is recoverable
-		if !config.IsRecoverable(err) {
-			return err
-		}
-
-		// Increment attempt counter
-		attempt++
-
-		// Last attempt, don't delay
-		if attempt >= config.MaxAttempts {
-			break
-		}
-
-		// Call the OnRetry callback if provided
-		if config.OnRetry != nil {
-			config.OnRetry(attempt, err, delay)
-		}
-
-		// Calculate next delay and wait
-		select {
-		case <-ctx.Done():
-			return ctx.Err()
-		case <-time.After(delay):
-			delay = config.Backoff.Delay(delay)
-		}
-	}
-
-	return fmt.Errorf("%w: %v", ErrAllAttemptsFailed, lastErr)
+	return nil
 }
 
-// DoWithValue executes a function with retries based on the provided config
-// This is for functions that return a value and an error
-func DoWithValue[T any](ctx context.Context, config Config, op func() (T, error)) (T, error) {
-	var zero T
-	var lastErr error
-
-	// Validate configuration
-	if config.Backoff == nil {
-		return zero, fmt.Errorf("backoff strategy is required")
-	}
-
-	if config.MaxAttempts == 0 {
-		config.MaxAttempts = 1 // At least one attempt
-	}
-
-	if config.IsRecoverable == nil {
-		config.IsRecoverable = defaultRecoverable()
-	}
-
+// doRetry implements the core retry logic
+// The operation function returns a boolean indicating success and an error
+func doRetry(ctx context.Context, config Config, operation func(attempt uint) (bool, error)) error {
 	attempt := uint(0)
 	delay := config.Backoff.MinDelay()
 
 	for attempt < config.MaxAttempts {
 		// Check context before the attempt
 		if ctx.Err() != nil {
-			return zero, ctx.Err()
+			return ctx.Err()
 		}
 
 		// Execute the operation
-		result, err := op()
-		if err == nil {
-			return result, nil // Success
+		success, err := operation(attempt)
+		if success {
+			return nil // Operation succeeded
 		}
-
-		lastErr = err
 
 		// Check if context is canceled
 		if errors.Is(err, context.Canceled) || ctx.Err() != nil {
-			return zero, err
+			return err
 		}
 
 		// Check if error is recoverable
 		if !config.IsRecoverable(err) {
-			return zero, err
+			return err
 		}
 
 		// Increment attempt counter
@@ -234,13 +165,14 @@ func DoWithValue[T any](ctx context.Context, config Config, op func() (T, error)
 		// Calculate next delay and wait
 		select {
 		case <-ctx.Done():
-			return zero, ctx.Err()
+			return ctx.Err()
 		case <-time.After(delay):
 			delay = config.Backoff.Delay(delay)
 		}
 	}
 
-	return zero, fmt.Errorf("%w: %v", ErrAllAttemptsFailed, lastErr)
+	// We've exhausted all attempts
+	return ErrAllAttemptsFailed
 }
 
 func defaultRecoverable() func(err error) bool {

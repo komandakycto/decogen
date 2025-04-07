@@ -1,4 +1,3 @@
-// internal/parser/parser.go
 package parser
 
 import (
