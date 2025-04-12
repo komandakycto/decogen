@@ -329,16 +329,20 @@ func TestWithTimeout(t *testing.T) {
 
 	t.Run("operation exceeds timeout", func(t *testing.T) {
 		mockB := new(MockBackoff)
-		mockB.On("MinDelay").Return(10 * time.Millisecond)
+		mockB.On("MinDelay").Return(5 * time.Millisecond)
+		mockB.On("Delay", mock.Anything).Return(5 * time.Millisecond).Maybe()
+
+		attempts := 0
 
 		result, err := retry.WithTimeout(
 			context.Background(),
 			retry.Config{
-				MaxAttempts: 3,
+				MaxAttempts: 50,
 				Backoff:     mockB,
 			},
-			50*time.Millisecond,
+			1*time.Millisecond,
 			func(ctx context.Context) (string, error) {
+				attempts++
 				// This operation takes longer than the timeout
 				select {
 				case <-time.After(200 * time.Millisecond):
@@ -350,6 +354,7 @@ func TestWithTimeout(t *testing.T) {
 		)
 
 		require.Error(t, err)
+		require.Equal(t, 1, attempts, "Operation should be called only once")
 		require.ErrorIs(t, err, context.DeadlineExceeded)
 		require.Equal(t, "", result)
 		mockB.AssertExpectations(t)

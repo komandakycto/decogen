@@ -139,8 +139,10 @@ func doRetry(ctx context.Context, config Config, operation func(attempt uint) (b
 			return nil // Operation succeeded
 		}
 
-		// Check if context is canceled
-		if errors.Is(err, context.Canceled) || ctx.Err() != nil {
+		// Check if context is canceled or deadline exceeded
+		if errors.Is(err, context.Canceled) ||
+			errors.Is(err, context.DeadlineExceeded) ||
+			ctx.Err() != nil {
 			return err
 		}
 
@@ -179,6 +181,7 @@ func defaultRecoverable() func(err error) bool {
 	return func(err error) bool {
 		return err != nil &&
 			!errors.Is(err, context.Canceled) &&
+			!errors.Is(err, context.DeadlineExceeded) &&
 			!IsUnrecoverableError(err)
 	}
 }
